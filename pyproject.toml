@@ -1,0 +1,38 @@
+[project]
+name = "ego-evidence-routing"
+version = "0.1.0"
+description = "Auxiliary evidence routing for egocentric video QA (CS-503)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.4",
+    "transformers @ git+https://github.com/huggingface/transformers",
+    "accelerate",
+    "qwen-vl-utils[decord]>=0.0.14",
+    "open-clip-torch",
+    "decord",
+    "Pillow",
+    "pandas",
+    "numpy",
+    "pyyaml",
+    "tqdm",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "ipython"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eer"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

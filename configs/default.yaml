@@ -1,0 +1,19 @@
+model:
+  name: "Qwen/Qwen3-VL-8B-Instruct"
+  dtype: "bfloat16"
+  device_map: "auto"
+
+data:
+  vqa_questions_path: "data/hdepic/vqa_questions.json"
+  video_clips_dir: "data/hdepic/clips/"
+  candidate_fps: 1  # extract candidate frames at this FPS
+  max_clip_duration_s: 600  # only use clips <= 10 minutes
+
+tools:
+  frame_budget: 8  # number of auxiliary frames each tool selects
+  clip_model: "ViT-SO400M-14-SigLIP"
+  clip_pretrained: "webli"
+
+eval:
+  results_dir: "results/"
+  val_split_ratio: 0.3  # for routing train/test split
