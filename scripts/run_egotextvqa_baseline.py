@@ -116,6 +116,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p.parse_args()
 
+
 def main() -> None:
     args = parse_args()
     setup_logging(level=getattr(logging, args.log_level))
@@ -173,13 +174,10 @@ def main() -> None:
             video_path = _resolve_video_path(str(q.video_id), video_clips_dir, video_index)
             if video_path is None:
                 logger.warning("Video not found for video_id=%s under %s", q.video_id, video_clips_dir)
-            
+
             auxiliary_frames = None
             if evidence_tool is not None and video_path is not None:
-                # Extract candidate frames (using `--fps` natively handles the heavy lifting)
                 candidate_frames = extract_candidate_frames(video_path, fps=args.fps)
-                
-                # Use the tool to find the most relevant ones. Default budget is 8.
                 selected_frames = evidence_tool.select(candidate_frames, q.question, budget=args.budget)
 
                 if args.save_collages:
@@ -194,14 +192,12 @@ def main() -> None:
                         )
                         if collage_path is not None:
                             saved_collages += 1
-                
-                # Extract PIL images to pass to the Vision-Language Model
+
                 if selected_frames:
                     auxiliary_frames = selected_frames
                     logger.info(f"Tool {args.tool} extracted {len(auxiliary_frames)} frames as evidence.")
 
             try:
-                # If frames-only is requested and we successfully extracted evidence, omit the raw video
                 if args.frames_only and auxiliary_frames is not None:
                     final_video_path = None
                 else:
@@ -217,7 +213,7 @@ def main() -> None:
                 logger.error(f"Error processing {q.question_id}: {e}")
                 predicted_text = ""
 
-            # VERY basic matching for open-ended QA. 
+            # VERY basic matching for open-ended QA.
             predicted_lower = predicted_text.strip().lower()
             correct_lower = q.correct_answer.strip().lower()
             is_correct = bool(predicted_lower) and (
