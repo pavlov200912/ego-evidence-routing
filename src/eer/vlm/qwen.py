@@ -111,7 +111,62 @@ class QwenVLM:
         self.processor = AutoProcessor.from_pretrained(model_name)
         logger.info("Model loaded.")
 
-    def answer_vqa(
+    def answer_open_ended(
+        self,
+        video_path: str | Path | None,
+        auxiliary_frames: list[Image.Image] | None,
+        question: str,
+    ) -> str:
+        """Run open-ended VQA inference.
+
+        Args:
+            video_path: Path to the video clip file, or None.
+            auxiliary_frames: List of PIL images selected by an evidence tool,
+                or None.
+            question: The question text.
+
+        Returns:
+            The raw decoded text string answer.
+        """
+        content: list[dict] = []
+
+        if video_path is not None:
+            content.append({"type": "video", "video": str(video_path), "fps": 1.0})
+
+        if auxiliary_frames:
+            for img in auxiliary_frames:
+                content.append({"type": "image", "image": img})
+
+        content.append({"type": "text", "text": question + " Please answer concisely."})
+
+        messages = [{"role": "user", "content": content}]
+
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+
+        device = next(self.model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=32,
+                do_sample=False,
+            )
+
+        input_len = inputs["input_ids"].shape[1]
+        generated_ids = outputs[0][input_len:]
+        raw_output = self.processor.decode(generated_ids, skip_special_tokens=True).strip()
+
+        logger.debug("Open-ended VQA output: %r", raw_output)
+        return raw_output
+
+    def answer_multiple_choice(
         self,
         video_path: str | Path | None,
         auxiliary_frames: list[Image.Image] | None,
