@@ -80,10 +80,3 @@ _TOOL_REGISTRY: dict[str, type[EvidenceTool]] = {
 
 3. Run: `uv run python scripts/run_ablation.py --tools my_tool --limit 10`
 
-## Team
-
-| Week | Owner | Task |
-|------|-------|------|
-| 1 | All | Scaffold + baseline + uniform/clip/motion tools |
-| 2 | Christina, Eren | `hand.py`, `crop.py` tools |
-| 3 | All | Oracle + predicted router (`routing/`) |
