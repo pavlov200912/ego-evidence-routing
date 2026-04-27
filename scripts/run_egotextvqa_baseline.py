@@ -24,6 +24,7 @@ from eer.vlm.qwen import QwenVLM
 from eer.tools.clip_retrieval import CLIPRetrievalTool
 from eer.tools.motion import MotionTool
 from eer.tools.ocr import OCRTool
+from eer.tools.uniform import UniformTool
 from eer.utils.visualization import save_selected_frame_artifacts
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,8 @@ def load_tool(tool_name: str | None):
         return MotionTool()
     elif tool_name == "ocr":
         return OCRTool()
+    elif tool_name == "uniform":
+        return UniformTool()
     else:
         raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -83,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="VQA execution for EgoTextVQA.")
     p.add_argument("--config", type=Path, default=Path("configs/egotextvqa.yaml"))
     p.add_argument("--limit", type=int, default=None)
-    p.add_argument("--tool", type=str, default="baseline", choices=["baseline", "clip", "motion", "ocr", "none"])
+    p.add_argument("--tool", type=str, default="baseline", choices=["baseline", "uniform", "clip", "motion", "ocr", "none"])
     p.add_argument("--frames-only", action="store_true", help="If set, only pass the tool-extracted frames to the VLM (omit the full video).")
     p.add_argument("--budget", type=int, default=8, help="Number of frames the tool can select.")
     p.add_argument("--fps", type=float, default=1.0, help="FPS extraction rate for candidate frames.")
