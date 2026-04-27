@@ -1,0 +1,11 @@
+model:
+  name: "Qwen/Qwen3-VL-2B-Instruct"
+  dtype: "bfloat16"
+  device_map: "auto"
+
+data:
+  vqa_questions_path: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_indoor_only/egotextvqa_indoor_annotation.jsonl"
+  video_clips_dir: "/scratch/izar/kopidaki/shared_egotextvqa"
+
+eval:
+  results_dir: "results/baseline"

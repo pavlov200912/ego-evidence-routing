@@ -9,8 +9,15 @@ We test whether specialised frame-selection tools (CLIP retrieval, motion keyfra
 # Clone and install
 git clone <repo-url>
 cd ego-evidence-routing
-uv sync
-uv sync --extra dev   # adds pytest, ruff, ipython
+
+# Recommended: setup using the exact environment requirements
+python -m venv proj_env
+source proj_env/bin/activate
+pip install -r requirements.txt
+
+# Alternative: setup with uv
+# uv sync
+# uv sync --extra dev   # adds pytest, ruff, ipython
 
 # Download data (Eren will fill this in)
 # Place files under data/hdepic/vqa_questions.json and data/hdepic/clips/
@@ -27,6 +34,14 @@ uv run python scripts/run_ablation.py --config configs/default.yaml --limit 10
 # Run ablation (specific tools)
 uv run python scripts/run_ablation.py --config configs/default.yaml \
     --tools uniform clip --limit 10
+
+# Run ablation and export selected-frame collages
+uv run python scripts/run_ablation.py --config configs/default.yaml \
+    --tools clip motion --limit 10 --save-collages
+
+# EgoTextVQA with OCR tool and collage export
+python scripts/run_egotextvqa_baseline.py --config configs/egotextvqa_indoor.yaml \
+    --tool ocr --limit 10 --save-collages
 
 # Analyse results
 uv run python scripts/analyze_results.py \
