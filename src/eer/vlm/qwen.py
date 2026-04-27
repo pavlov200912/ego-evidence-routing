@@ -116,6 +116,7 @@ class QwenVLM:
         video_path: str | Path | None,
         auxiliary_frames: list[Image.Image] | None,
         question: str,
+        video_fps: float = 1.0,
     ) -> str:
         """Run open-ended VQA inference.
 
@@ -124,6 +125,7 @@ class QwenVLM:
             auxiliary_frames: List of PIL images selected by an evidence tool,
                 or None.
             question: The question text.
+            video_fps: FPS to sample the video at if passing the full video.
 
         Returns:
             The raw decoded text string answer.
@@ -131,7 +133,7 @@ class QwenVLM:
         content: list[dict] = []
 
         if video_path is not None:
-            content.append({"type": "video", "video": str(video_path), "fps": 1.0})
+            content.append({"type": "video", "video": str(video_path), "fps": video_fps})
 
         if auxiliary_frames:
             for img in auxiliary_frames:
@@ -141,11 +143,19 @@ class QwenVLM:
 
         messages = [{"role": "user", "content": content}]
 
-        inputs = self.processor.apply_chat_template(
+        from qwen_vl_utils import process_vision_info
+        
+        text = self.processor.apply_chat_template(
             messages,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=True,
-            return_dict=True,
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
             return_tensors="pt",
         )
 
@@ -205,11 +215,19 @@ class QwenVLM:
 
         messages = [{"role": "user", "content": content}]
 
-        inputs = self.processor.apply_chat_template(
+        from qwen_vl_utils import process_vision_info
+        
+        text = self.processor.apply_chat_template(
             messages,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=True,
-            return_dict=True,
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
             return_tensors="pt",
         )
 

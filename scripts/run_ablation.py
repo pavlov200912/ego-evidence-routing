@@ -23,6 +23,7 @@ from eer.tools.clip_retrieval import CLIPRetrievalTool
 from eer.tools.motion import MotionTool
 from eer.tools.uniform import UniformTool
 from eer.utils.logging import setup_logging
+from eer.utils.visualization import save_selected_frame_artifacts
 from eer.vlm.qwen import QwenVLM
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,23 @@ def parse_args() -> argparse.Namespace:
         help="Which tools to run (default: all).",
     )
     p.add_argument("--limit", type=int, default=None, help="Run on first N questions only.")
+    p.add_argument(
+        "--save-collages",
+        action="store_true",
+        help="Save collage images and metadata for selected tool frames.",
+    )
+    p.add_argument(
+        "--collages-dir",
+        type=Path,
+        default=None,
+        help="Output directory for collages (default: <results_dir>/<run_name>_collages).",
+    )
+    p.add_argument(
+        "--collage-max",
+        type=int,
+        default=None,
+        help="Maximum number of question-tool collages to save.",
+    )
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p.parse_args()
 
@@ -101,6 +119,12 @@ def main() -> None:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = results_dir / f"ablation_{timestamp}.csv"
+    collage_root = (
+        args.collages_dir
+        if args.collages_dir is not None
+        else results_dir / f"ablation_{timestamp}_collages"
+    )
+    saved_collages = 0
 
     fieldnames = [
         "question_id",
@@ -130,6 +154,20 @@ def main() -> None:
                     question=q.question,
                     budget=frame_budget,
                 )
+
+                if args.save_collages:
+                    if args.collage_max is None or saved_collages < args.collage_max:
+                        collage_path, _ = save_selected_frame_artifacts(
+                            frames=selected,
+                            output_dir=collage_root,
+                            question_id=q.question_id,
+                            tool_name=tool.name,
+                            question=q.question,
+                            video_id=q.video_id,
+                        )
+                        if collage_path is not None:
+                            saved_collages += 1
+
                 aux_images = [f.image for f in selected]
 
                 result = vlm.answer_vqa(
@@ -164,6 +202,8 @@ def main() -> None:
                 )
 
     logger.info("Ablation results saved to %s", output_path)
+    if args.save_collages:
+        logger.info("Saved %d collage artifacts to %s", saved_collages, collage_root)
 
 
 if __name__ == "__main__":

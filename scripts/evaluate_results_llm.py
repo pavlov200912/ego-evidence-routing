@@ -43,7 +43,7 @@ def parse_response(response: str) -> tuple[bool, int]:
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate VQA predictions using an open-source LLM as a judge.")
     parser.add_argument("--csv-path", type=str, required=True, help="Path to the baseline predictions CSV.")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Open source LLM to use as judge.")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Open source LLM to use as judge.")
     return parser.parse_args()
 
 def main():
