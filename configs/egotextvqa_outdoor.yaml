@@ -5,7 +5,12 @@ model:
 
 data:
   vqa_questions_path: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_outdoor_only/egotextvqa_outdoor_annotation.jsonl"
-  video_clips_dir: "/scratch/izar/kopidaki/shared_egotextvqa"
+  video_clips_dir: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_outdoor_only/EgoTextVQA-Outdoor"
+
+tools:
+  frame_budget: 4
+  clip_model: "ViT-SO400M-14-SigLIP"
+  clip_pretrained: "webli"
 
 eval:
-  results_dir: "results/baseline"
+  results_dir: "results/egotextvqa"

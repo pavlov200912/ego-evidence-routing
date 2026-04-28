@@ -50,6 +50,8 @@ htmlcov/
 # Project-specific
 data/
 results/
+logs/
+.frame_cache/
 *.csv
 *.json
 !configs/*.yaml
@@ -58,3 +60,9 @@ results/
 # OS
 .DS_Store
 Thumbs.db
+
+# uv
+uv.lock
+
+# Personal notes
+PROGRESS.md

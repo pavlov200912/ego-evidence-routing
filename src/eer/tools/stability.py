@@ -1,4 +1,4 @@
-"""Motion / scene-change keyframe selection tool."""
+"""Stability-based frame selection tool."""
 
 from __future__ import annotations
 
@@ -13,24 +13,13 @@ from eer.tools.base import EvidenceTool
 logger = logging.getLogger(__name__)
 
 
-def _frame_to_gray_array(img: Image.Image, size: tuple[int, int] = (64, 64)) -> np.ndarray:
-    """Downsample and convert to float grayscale for fast diff computation."""
-    return np.asarray(img.convert("L").resize(size, Image.BILINEAR), dtype=np.float32)
-
-
 def _motion_scores(frames: list[Frame]) -> np.ndarray:
-    """Compute a motion score for each frame using pixel-wise L1 differences.
-
-    Each frame is scored as max(diff_with_prev, diff_with_next).
-    Edge frames use only the available neighbor.
-
-    Returns:
-        Array of shape (N,) with non-negative motion scores.
-    """
-    arrays = [_frame_to_gray_array(f.image) for f in frames]
+    arrays = [
+        np.array(f.image.convert("L").resize((64, 64), Image.BILINEAR), dtype=np.float32)
+        for f in frames
+    ]
     n = len(arrays)
     scores = np.zeros(n, dtype=np.float32)
-
     for i in range(n):
         diffs: list[float] = []
         if i > 0:
@@ -38,14 +27,13 @@ def _motion_scores(frames: list[Frame]) -> np.ndarray:
         if i < n - 1:
             diffs.append(float(np.mean(np.abs(arrays[i] - arrays[i + 1]))))
         scores[i] = max(diffs) if diffs else 0.0
-
     return scores
 
 
-def _temporally_diverse(
+def _temporally_diverse_stable(
     frames: list[Frame], scores: np.ndarray, budget: int
 ) -> list[Frame]:
-    """Select highest-scoring frame per temporal bucket to ensure temporal spread."""
+    """Select lowest-motion frame per temporal bucket to ensure temporal spread."""
     pairs = sorted(zip(frames, scores.tolist()), key=lambda x: x[0].timestamp_s)
     frames_t = [p[0] for p in pairs]
     scores_t = np.array([p[1] for p in pairs])
@@ -57,22 +45,23 @@ def _temporally_diverse(
         end = min(int((b + 1) * bucket_size), n)
         if start >= end:
             continue
-        best = int(np.argmax(scores_t[start:end]))
+        best = int(np.argmin(scores_t[start:end]))
         selected.append(frames_t[start + best])
     return selected
 
 
-class MotionTool(EvidenceTool):
-    """Select frames at high-motion / scene-change moments, spread across time.
+class StabilityTool(EvidenceTool):
+    """Select the most temporally stable frames from a video clip, spread across time.
 
-    Picks the highest inter-frame motion (L1 pixel diff) frame within each
-    temporal bucket, ensuring coverage of scene changes across the full clip
-    rather than clustering on a single high-activity segment.
+    Picks the lowest-motion frame within each temporal bucket. In egocentric
+    video, low-motion frames correspond to moments where the camera has
+    stabilised — typically when the wearer is looking at something rather than
+    walking past it.
     """
 
     @property
     def name(self) -> str:
-        return "motion"
+        return "stability"
 
     def select(
         self,
@@ -87,8 +76,6 @@ class MotionTool(EvidenceTool):
             return sorted(candidate_frames, key=lambda f: f.timestamp_s)
 
         scores = _motion_scores(candidate_frames)
-        selected = _temporally_diverse(candidate_frames, scores, budget)
-        logger.debug(
-            "MotionTool: selected %d/%d frames", len(selected), len(candidate_frames)
-        )
+        selected = _temporally_diverse_stable(candidate_frames, scores, budget)
+        logger.debug("StabilityTool: selected %d/%d frames", len(selected), len(candidate_frames))
         return selected

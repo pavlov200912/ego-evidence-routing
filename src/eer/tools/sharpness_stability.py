@@ -1,4 +1,4 @@
-"""Motion / scene-change keyframe selection tool."""
+"""Hybrid sharpness + stability frame selection tool."""
 
 from __future__ import annotations
 
@@ -13,24 +13,26 @@ from eer.tools.base import EvidenceTool
 logger = logging.getLogger(__name__)
 
 
-def _frame_to_gray_array(img: Image.Image, size: tuple[int, int] = (64, 64)) -> np.ndarray:
-    """Downsample and convert to float grayscale for fast diff computation."""
-    return np.asarray(img.convert("L").resize(size, Image.BILINEAR), dtype=np.float32)
+def _sharpness_scores(frames: list[Frame]) -> np.ndarray:
+    scores = np.zeros(len(frames), dtype=np.float32)
+    for i, f in enumerate(frames):
+        gray = np.array(f.image.convert("L"), dtype=np.float32)
+        laplacian = (
+            gray[:-2, 1:-1] + gray[2:, 1:-1] +
+            gray[1:-1, :-2] + gray[1:-1, 2:] -
+            4 * gray[1:-1, 1:-1]
+        )
+        scores[i] = laplacian.var()
+    return scores
 
 
 def _motion_scores(frames: list[Frame]) -> np.ndarray:
-    """Compute a motion score for each frame using pixel-wise L1 differences.
-
-    Each frame is scored as max(diff_with_prev, diff_with_next).
-    Edge frames use only the available neighbor.
-
-    Returns:
-        Array of shape (N,) with non-negative motion scores.
-    """
-    arrays = [_frame_to_gray_array(f.image) for f in frames]
+    arrays = [
+        np.array(f.image.convert("L").resize((64, 64), Image.BILINEAR), dtype=np.float32)
+        for f in frames
+    ]
     n = len(arrays)
     scores = np.zeros(n, dtype=np.float32)
-
     for i in range(n):
         diffs: list[float] = []
         if i > 0:
@@ -38,8 +40,14 @@ def _motion_scores(frames: list[Frame]) -> np.ndarray:
         if i < n - 1:
             diffs.append(float(np.mean(np.abs(arrays[i] - arrays[i + 1]))))
         scores[i] = max(diffs) if diffs else 0.0
-
     return scores
+
+
+def _normalize(scores: np.ndarray) -> np.ndarray:
+    min_s, max_s = scores.min(), scores.max()
+    if max_s - min_s < 1e-8:
+        return np.ones_like(scores)
+    return (scores - min_s) / (max_s - min_s)
 
 
 def _temporally_diverse(
@@ -62,17 +70,18 @@ def _temporally_diverse(
     return selected
 
 
-class MotionTool(EvidenceTool):
-    """Select frames at high-motion / scene-change moments, spread across time.
+class SharpnessStabilityTool(EvidenceTool):
+    """Select frames that are both sharp and temporally stable, spread across time.
 
-    Picks the highest inter-frame motion (L1 pixel diff) frame within each
-    temporal bucket, ensuring coverage of scene changes across the full clip
-    rather than clustering on a single high-activity segment.
+    Combines sharpness (Laplacian variance) and stability (inverse motion)
+    as a weighted sum of their normalized values. Using addition rather than
+    multiplication avoids zeroing out frames that score well on one dimension
+    but near-zero on the other.
     """
 
     @property
     def name(self) -> str:
-        return "motion"
+        return "sharpness_stability"
 
     def select(
         self,
@@ -86,9 +95,12 @@ class MotionTool(EvidenceTool):
         if len(candidate_frames) <= budget:
             return sorted(candidate_frames, key=lambda f: f.timestamp_s)
 
-        scores = _motion_scores(candidate_frames)
-        selected = _temporally_diverse(candidate_frames, scores, budget)
+        sharpness = _normalize(_sharpness_scores(candidate_frames))
+        stability = 1.0 - _normalize(_motion_scores(candidate_frames))
+        combined = 0.5 * sharpness + 0.5 * stability
+
+        selected = _temporally_diverse(candidate_frames, combined, budget)
         logger.debug(
-            "MotionTool: selected %d/%d frames", len(selected), len(candidate_frames)
+            "SharpnessStabilityTool: selected %d/%d frames", len(selected), len(candidate_frames)
         )
         return selected
