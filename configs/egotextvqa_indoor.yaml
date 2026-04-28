@@ -6,6 +6,10 @@ model:
 data:
   vqa_questions_path: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_indoor_only/egotextvqa_indoor_annotation.jsonl"
   video_clips_dir: "/scratch/izar/kopidaki/shared_egotextvqa"
+  candidate_fps: 1  # extract candidate frames at this FPS
+
+tools:
+  frame_budget: 8  # number of auxiliary frames each tool selects
 
 eval:
   results_dir: "results/baseline"

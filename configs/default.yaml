@@ -4,8 +4,8 @@ model:
   device_map: "auto"
 
 data:
-  vqa_questions_path: "data/hdepic/vqa_questions.json"
-  video_clips_dir: "data/hdepic/clips/"
+  vqa_questions_path: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_indoor_only/egotextvqa_indoor_annotation.jsonl"
+  video_clips_dir: "/scratch/izar/kopidaki/shared_egotextvqa/EgoTextVQA_indoor_only/EgoTextVQA-Indoor/"
   candidate_fps: 1  # extract candidate frames at this FPS
   max_clip_duration_s: 600  # only use clips <= 10 minutes
 
