@@ -22,6 +22,7 @@ from eer.vlm.qwen import QwenVLM
 
 # Available Tools
 from eer.tools.clip_retrieval import CLIPRetrievalTool
+from eer.tools.crop import CropTool, OCRCropTool
 from eer.tools.motion import MotionTool
 from eer.tools.ocr import OCRTool
 from eer.tools.uniform import UniformTool
@@ -77,6 +78,10 @@ def load_tool(tool_name: str | None):
         return MotionTool()
     elif tool_name == "ocr":
         return OCRTool()
+    elif tool_name == "crop":
+        return CropTool()
+    elif tool_name == "ocr_crop":
+        return OCRCropTool()
     elif tool_name == "uniform":
         return UniformTool()
     else:
@@ -86,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="VQA execution for EgoTextVQA.")
     p.add_argument("--config", type=Path, default=Path("configs/egotextvqa.yaml"))
     p.add_argument("--limit", type=int, default=None)
-    p.add_argument("--tool", type=str, default="baseline", choices=["baseline", "uniform", "clip", "motion", "ocr", "none"])
+    p.add_argument("--tool", type=str, default="baseline", choices=["baseline", "uniform", "clip", "motion", "ocr", "crop", "ocr_crop", "none"])
     p.add_argument("--frames-only", action="store_true", help="If set, only pass the tool-extracted frames to the VLM (omit the full video).")
     p.add_argument("--budget", type=int, default=8, help="Number of frames the tool can select.")
     p.add_argument("--fps", type=float, default=1.0, help="FPS extraction rate for candidate frames.")
@@ -169,7 +174,7 @@ def main() -> None:
             if video_path is None:
                 logger.warning("Video not found for video_id=%s under %s", q.video_id, video_clips_dir)
             
-            auxiliary_images = None
+            auxiliary_frames = None
             if evidence_tool is not None and video_path is not None:
                 # Extract candidate frames (using `--fps` natively handles the heavy lifting)
                 candidate_frames = extract_candidate_frames(video_path, fps=args.fps)
@@ -192,19 +197,19 @@ def main() -> None:
                 
                 # Extract PIL images to pass to the Vision-Language Model
                 if selected_frames:
-                    auxiliary_images = [f.image for f in selected_frames]
-                    logger.info(f"Tool {args.tool} extracted {len(auxiliary_images)} frames as evidence.")
+                    auxiliary_frames = selected_frames
+                    logger.info(f"Tool {args.tool} extracted {len(auxiliary_frames)} frames as evidence.")
 
             try:
                 # If frames-only is requested and we successfully extracted evidence, omit the raw video
-                if args.frames_only and auxiliary_images is not None:
+                if args.frames_only and auxiliary_frames is not None:
                     final_video_path = None
                 else:
                     final_video_path = video_path
 
                 predicted_text = vlm.answer_open_ended(
                     video_path=final_video_path,
-                    auxiliary_frames=auxiliary_images,
+                    auxiliary_frames=auxiliary_frames,
                     question=q.question,
                     video_fps=args.vlm_fps,
                 )
@@ -213,9 +218,11 @@ def main() -> None:
                 predicted_text = ""
 
             # VERY basic matching for open-ended QA. 
-            predicted_lower = predicted_text.lower()
-            correct_lower = q.correct_answer.lower()
-            is_correct = correct_lower in predicted_lower or predicted_lower in correct_lower
+            predicted_lower = predicted_text.strip().lower()
+            correct_lower = q.correct_answer.strip().lower()
+            is_correct = bool(predicted_lower) and (
+                correct_lower in predicted_lower or predicted_lower in correct_lower
+            )
 
             writer.writerow(
                 {

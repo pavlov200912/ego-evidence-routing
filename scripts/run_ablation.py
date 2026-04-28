@@ -20,7 +20,9 @@ from eer.data.frames import extract_candidate_frames
 from eer.data.hdepic import HDEPICDataset
 from eer.tools.base import EvidenceTool
 from eer.tools.clip_retrieval import CLIPRetrievalTool
+from eer.tools.crop import CropTool, OCRCropTool
 from eer.tools.motion import MotionTool
+from eer.tools.ocr import OCRTool
 from eer.tools.uniform import UniformTool
 from eer.utils.logging import setup_logging
 from eer.utils.visualization import save_selected_frame_artifacts
@@ -32,6 +34,9 @@ _TOOL_REGISTRY: dict[str, type[EvidenceTool]] = {
     "uniform": UniformTool,
     "clip": CLIPRetrievalTool,
     "motion": MotionTool,
+    "crop": CropTool,
+    "ocr": OCRTool,
+    "ocr_crop": OCRCropTool,
 }
 
 
@@ -168,11 +173,9 @@ def main() -> None:
                         if collage_path is not None:
                             saved_collages += 1
 
-                aux_images = [f.image for f in selected]
-
-                result = vlm.answer_vqa(
+                result = vlm.answer_multiple_choice(
                     video_path=video_path if video_path.exists() else None,
-                    auxiliary_frames=aux_images if aux_images else None,
+                    auxiliary_frames=selected if selected else None,
                     question=q.question,
                     choices=q.choices,
                 )

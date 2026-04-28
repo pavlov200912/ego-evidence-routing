@@ -81,7 +81,7 @@ def main() -> None:
 
         for q in questions:
             video_path = video_clips_dir / f"{q.video_id}.mp4"
-            result = vlm.answer_vqa(
+            result = vlm.answer_multiple_choice(
                 video_path=video_path if video_path.exists() else None,
                 auxiliary_frames=None,
                 question=q.question,
