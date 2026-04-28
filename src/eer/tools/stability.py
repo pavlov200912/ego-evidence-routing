@@ -30,10 +30,36 @@ def _motion_scores(frames: list[Frame]) -> np.ndarray:
     return scores
 
 
+def _center_of_stable_run(scores: np.ndarray) -> int:
+    """Return the index of the center frame of the longest run of scores at or
+    below the median. A run of many consecutive low-motion frames is more
+    reliably stable than a single isolated low-motion frame. Falls back to
+    argmin when no run exists."""
+    threshold = float(np.mean(scores))
+    best_len, best_center = 0, None
+    run_start = None
+    for i, s in enumerate(scores.tolist()):
+        if s < threshold:
+            if run_start is None:
+                run_start = i
+        else:
+            if run_start is not None:
+                length = i - run_start
+                if length > best_len:
+                    best_len = length
+                    best_center = run_start + length // 2
+                run_start = None
+    if run_start is not None:
+        length = len(scores) - run_start
+        if length > best_len:
+            best_center = run_start + length // 2
+    return best_center if best_center is not None else int(np.argmin(scores))
+
+
 def _temporally_diverse_stable(
     frames: list[Frame], scores: np.ndarray, budget: int
 ) -> list[Frame]:
-    """Select lowest-motion frame per temporal bucket to ensure temporal spread."""
+    """Select the center of the longest stable run per temporal bucket."""
     pairs = sorted(zip(frames, scores.tolist()), key=lambda x: x[0].timestamp_s)
     frames_t = [p[0] for p in pairs]
     scores_t = np.array([p[1] for p in pairs])
@@ -45,8 +71,8 @@ def _temporally_diverse_stable(
         end = min(int((b + 1) * bucket_size), n)
         if start >= end:
             continue
-        best = int(np.argmin(scores_t[start:end]))
-        selected.append(frames_t[start + best])
+        idx = _center_of_stable_run(scores_t[start:end])
+        selected.append(frames_t[start + idx])
     return selected
 
 

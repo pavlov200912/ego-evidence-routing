@@ -42,10 +42,25 @@ def _motion_scores(frames: list[Frame]) -> np.ndarray:
     return scores
 
 
+def _settled_after_peak(scores: np.ndarray, settle_window: int = 4) -> int:
+    """Find the scene-change peak (argmax), then return the most stable frame
+    in the window immediately following it.
+
+    The peak frame itself is often mid-transition and blurry. The frame a few
+    steps later, once motion has subsided, captures the new scene content more
+    cleanly. Falls back to the peak when it sits at the end of the bucket."""
+    peak = int(np.argmax(scores))
+    search_start = peak + 1
+    search_end = min(peak + 1 + settle_window, len(scores))
+    if search_start >= len(scores):
+        return peak
+    return search_start + int(np.argmin(scores[search_start:search_end]))
+
+
 def _temporally_diverse(
     frames: list[Frame], scores: np.ndarray, budget: int
 ) -> list[Frame]:
-    """Select highest-scoring frame per temporal bucket to ensure temporal spread."""
+    """Select the settle point after the motion peak per temporal bucket."""
     pairs = sorted(zip(frames, scores.tolist()), key=lambda x: x[0].timestamp_s)
     frames_t = [p[0] for p in pairs]
     scores_t = np.array([p[1] for p in pairs])
@@ -57,8 +72,8 @@ def _temporally_diverse(
         end = min(int((b + 1) * bucket_size), n)
         if start >= end:
             continue
-        best = int(np.argmax(scores_t[start:end]))
-        selected.append(frames_t[start + best])
+        idx = _settled_after_peak(scores_t[start:end])
+        selected.append(frames_t[start + idx])
     return selected
 
 
