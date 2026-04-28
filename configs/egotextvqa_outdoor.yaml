@@ -1,5 +1,5 @@
 model:
-  name: "Qwen/Qwen3-VL-2B-Instruct"
+  name: "Qwen/Qwen3-VL-8B-Instruct"
   dtype: "bfloat16"
   device_map: "auto"
 
