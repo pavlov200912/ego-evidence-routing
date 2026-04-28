@@ -7,8 +7,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from PIL import Image
 
-from eer.vlm.qwen import VLMResult, _build_choice_prompt, _extract_letter, _extract_log_probs
+from eer.data.frames import Frame
+from eer.vlm.qwen import (
+    VLMResult,
+    _append_auxiliary_frame_content,
+    _build_choice_prompt,
+    _clear_sampling_defaults,
+    _extract_letter,
+    _extract_log_probs,
+    _format_timestamp,
+)
 
 
 CHOICES = ["Cooking", "Reading", "Running", "Sleeping", "Writing"]
@@ -90,6 +100,36 @@ def test_extract_log_probs_empty_scores() -> None:
     assert all(v == float("-inf") for v in log_probs.values())
 
 
+def test_clear_sampling_defaults_removes_sampling_only_flags() -> None:
+    config = MagicMock()
+    config.temperature = 0.7
+    config.top_p = 0.8
+    config.top_k = 20
+
+    _clear_sampling_defaults(config)
+
+    assert config.temperature is None
+    assert config.top_p is None
+    assert config.top_k is None
+
+
+def test_format_timestamp() -> None:
+    assert _format_timestamp(12.34) == "12.3s"
+    assert _format_timestamp(75.0) == "1m 15.0s"
+
+
+def test_append_auxiliary_frame_content_includes_timestamp() -> None:
+    img = Image.new("RGB", (8, 8), "white")
+    frame = Frame(index=3, timestamp_s=75.0, image=img)
+    content: list[dict] = []
+
+    _append_auxiliary_frame_content(content, [frame])
+
+    assert content[0]["type"] == "text"
+    assert "timestamp 1m 15.0s" in content[0]["text"]
+    assert content[1] == {"type": "image", "image": img}
+
+
 # --- VLMResult dataclass ---
 
 def test_vlm_result_fields() -> None:
@@ -113,6 +153,9 @@ def test_qwen_vlm_init_calls_from_pretrained() -> None:
         # Prevent torch from crashing on device ops
         mock_model = MagicMock()
         mock_model.parameters.return_value = iter([torch.zeros(1)])
+        mock_model.generation_config.temperature = 0.7
+        mock_model.generation_config.top_p = 0.8
+        mock_model.generation_config.top_k = 20
         mock_model_cls.from_pretrained.return_value = mock_model
         mock_proc_cls.from_pretrained.return_value = MagicMock()
 
@@ -122,3 +165,6 @@ def test_qwen_vlm_init_calls_from_pretrained() -> None:
 
         mock_model_cls.from_pretrained.assert_called_once()
         mock_proc_cls.from_pretrained.assert_called_once_with("fake/model")
+        assert vlm.model.generation_config.temperature is None
+        assert vlm.model.generation_config.top_p is None
+        assert vlm.model.generation_config.top_k is None
