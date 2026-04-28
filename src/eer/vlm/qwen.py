@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 import math
 import re
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import torch
 from PIL import Image
+
+from eer.data.frames import Frame
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,77 @@ def _extract_log_probs(
     return result
 
 
+def _clear_sampling_defaults(generation_config: Any) -> None:
+    """Remove sampling-only defaults so deterministic generation is quiet."""
+    for attr in ("temperature", "top_p", "top_k"):
+        if hasattr(generation_config, attr):
+            setattr(generation_config, attr, None)
+
+
+def _format_timestamp(timestamp_s: float) -> str:
+    """Format a frame timestamp compactly for the prompt."""
+    minutes = int(timestamp_s // 60)
+    seconds = timestamp_s - minutes * 60
+    if minutes:
+        return f"{minutes:d}m {seconds:04.1f}s"
+    return f"{seconds:.1f}s"
+
+
+def _append_auxiliary_frame_content(
+    content: list[dict],
+    auxiliary_frames: list[Image.Image | Frame] | None,
+) -> None:
+    """Append auxiliary images, adding timestamp labels when Frame metadata exists."""
+    if not auxiliary_frames:
+        return
+
+    for i, item in enumerate(auxiliary_frames, start=1):
+        if isinstance(item, Frame):
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"Auxiliary evidence image {i} "
+                        f"(timestamp {_format_timestamp(item.timestamp_s)}):"
+                    ),
+                }
+            )
+            content.append({"type": "image", "image": item.image})
+        else:
+            content.append({"type": "image", "image": item})
+
+
+def _prepare_vision_inputs(
+    messages: list[dict],
+    image_patch_size: int = 16,
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Process Qwen vision messages with video metadata when supported."""
+    from qwen_vl_utils import process_vision_info
+
+    signature = inspect.signature(process_vision_info)
+    kwargs: dict[str, Any] = {"image_patch_size": image_patch_size}
+    if "return_video_kwargs" in signature.parameters:
+        kwargs["return_video_kwargs"] = True
+    if "return_video_metadata" in signature.parameters:
+        kwargs["return_video_metadata"] = True
+
+    processed = process_vision_info(messages, **kwargs)
+    if len(processed) == 2:
+        image_inputs, video_inputs = processed
+        return image_inputs, video_inputs, {}
+
+    image_inputs, video_inputs, video_kwargs = processed
+    processor_kwargs = dict(video_kwargs or {})
+
+    if video_inputs is not None and "return_video_metadata" in kwargs:
+        video_inputs, video_metadata = zip(*video_inputs)
+        processor_kwargs["video_metadata"] = list(video_metadata)
+        processor_kwargs.setdefault("do_resize", False)
+        video_inputs = list(video_inputs)
+
+    return image_inputs, video_inputs, processor_kwargs
+
+
 class QwenVLM:
     """Thin wrapper around Qwen3-VL for multiple-choice VQA.
 
@@ -108,13 +182,14 @@ class QwenVLM:
             device_map=device_map,
         )
         self.model.eval()
+        _clear_sampling_defaults(self.model.generation_config)
         self.processor = AutoProcessor.from_pretrained(model_name)
         logger.info("Model loaded.")
 
     def answer_open_ended(
         self,
         video_path: str | Path | None,
-        auxiliary_frames: list[Image.Image] | None,
+        auxiliary_frames: list[Image.Image | Frame] | None,
         question: str,
         video_fps: float = 1.0,
     ) -> str:
@@ -122,8 +197,9 @@ class QwenVLM:
 
         Args:
             video_path: Path to the video clip file, or None.
-            auxiliary_frames: List of PIL images selected by an evidence tool,
-                or None.
+            auxiliary_frames: List of PIL images or Frame objects selected by an
+                evidence tool, or None. Frame objects add timestamp labels to
+                the prompt.
             question: The question text.
             video_fps: FPS to sample the video at if passing the full video.
 
@@ -133,30 +209,28 @@ class QwenVLM:
         content: list[dict] = []
 
         if video_path is not None:
+            logger.info("Passing video to Qwen with requested sample fps=%.3f", video_fps)
             content.append({"type": "video", "video": str(video_path), "fps": video_fps})
 
-        if auxiliary_frames:
-            for img in auxiliary_frames:
-                content.append({"type": "image", "image": img})
+        _append_auxiliary_frame_content(content, auxiliary_frames)
 
         content.append({"type": "text", "text": question + " Please answer concisely."})
 
         messages = [{"role": "user", "content": content}]
 
-        from qwen_vl_utils import process_vision_info
-        
         text = self.processor.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
         )
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs, processor_kwargs = _prepare_vision_inputs(messages)
         inputs = self.processor(
             text=[text],
             images=image_inputs,
             videos=video_inputs,
             padding=True,
             return_tensors="pt",
+            **processor_kwargs,
         )
 
         device = next(self.model.parameters()).device
@@ -179,9 +253,10 @@ class QwenVLM:
     def answer_multiple_choice(
         self,
         video_path: str | Path | None,
-        auxiliary_frames: list[Image.Image] | None,
+        auxiliary_frames: list[Image.Image | Frame] | None,
         question: str,
         choices: list[str],
+        video_fps: float = 1.0,
     ) -> VLMResult:
         """Run multiple-choice VQA inference.
 
@@ -192,10 +267,12 @@ class QwenVLM:
 
         Args:
             video_path: Path to the video clip file, or None.
-            auxiliary_frames: List of PIL images selected by an evidence tool,
-                or None.
+            auxiliary_frames: List of PIL images or Frame objects selected by an
+                evidence tool, or None. Frame objects add timestamp labels to
+                the prompt.
             question: The question text.
             choices: List of exactly 5 answer strings (indexed A–E).
+            video_fps: FPS to sample the video at if passing the full video.
 
         Returns:
             VLMResult with the predicted letter, per-letter log-probs, and
@@ -204,31 +281,29 @@ class QwenVLM:
         content: list[dict] = []
 
         if video_path is not None:
-            content.append({"type": "video", "video": str(video_path)})
+            logger.info("Passing video to Qwen with requested sample fps=%.3f", video_fps)
+            content.append({"type": "video", "video": str(video_path), "fps": video_fps})
 
-        if auxiliary_frames:
-            for img in auxiliary_frames:
-                content.append({"type": "image", "image": img})
+        _append_auxiliary_frame_content(content, auxiliary_frames)
 
         prompt = _build_choice_prompt(question, choices)
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
 
-        from qwen_vl_utils import process_vision_info
-        
         text = self.processor.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
         )
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs, processor_kwargs = _prepare_vision_inputs(messages)
         inputs = self.processor(
             text=[text],
             images=image_inputs,
             videos=video_inputs,
             padding=True,
             return_tensors="pt",
+            **processor_kwargs,
         )
 
         # Move inputs to the model's device
