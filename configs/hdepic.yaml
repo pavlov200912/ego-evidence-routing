@@ -1,0 +1,21 @@
+model:
+  name: "Qwen/Qwen3-VL-2B-Instruct"
+  dtype: "bfloat16"
+  device_map: "auto"
+
+data:
+  # Directory containing the HD-EPIC vqa-benchmark/*.json files
+  vqa_benchmark_dir: "/scratch/izar/cljordan/hd-epic-annotations/vqa-benchmark"
+  # Root directory where downloaded .mp4 files live (HD-EPIC/ subfolder created by the downloader)
+  video_clips_dir: "/scratch/izar/cljordan/hdepic_data/HD-EPIC/Videos"
+  candidate_fps: 1
+  min_clip_duration_s: 300   # exclude clips <5 min
+  max_clip_duration_s: 3600  # up to 1h; questions with no clip window always kept
+
+tools:
+  frame_budget: 8
+  clip_model: "ViT-SO400M-14-SigLIP"
+  clip_pretrained: "webli"
+
+eval:
+  results_dir: "results/hdepic/"

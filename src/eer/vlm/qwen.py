@@ -97,6 +97,9 @@ def _format_timestamp(timestamp_s: float) -> str:
     return f"{seconds:.1f}s"
 
 
+_IMAGE_MAX_PIXELS = 256 * 28 * 28  # ≈ 448×448 — keeps visual tokens/frame manageable
+
+
 def _append_auxiliary_frame_content(
     content: list[dict],
     auxiliary_frames: list[Image.Image | Frame] | None,
@@ -116,9 +119,19 @@ def _append_auxiliary_frame_content(
                     ),
                 }
             )
-            content.append({"type": "image", "image": item.image})
+            content.append({
+                "type": "image",
+                "image": item.image,
+                "min_pixels": 4 * 28 * 28,
+                "max_pixels": _IMAGE_MAX_PIXELS,
+            })
         else:
-            content.append({"type": "image", "image": item})
+            content.append({
+                "type": "image",
+                "image": item,
+                "min_pixels": 4 * 28 * 28,
+                "max_pixels": _IMAGE_MAX_PIXELS,
+            })
 
 
 def _prepare_vision_inputs(
@@ -210,7 +223,13 @@ class QwenVLM:
 
         if video_path is not None:
             logger.info("Passing video to Qwen with requested sample fps=%.3f", video_fps)
-            content.append({"type": "video", "video": str(video_path), "fps": video_fps})
+            content.append({
+                "type": "video",
+                "video": str(video_path),
+                "fps": video_fps,
+                "min_pixels": 4 * 28 * 28,
+                "max_pixels": _IMAGE_MAX_PIXELS,
+            })
 
         _append_auxiliary_frame_content(content, auxiliary_frames)
 
@@ -257,6 +276,7 @@ class QwenVLM:
         question: str,
         choices: list[str],
         video_fps: float = 1.0,
+        video_max_frames: int = 64,
     ) -> VLMResult:
         """Run multiple-choice VQA inference.
 
@@ -281,8 +301,17 @@ class QwenVLM:
         content: list[dict] = []
 
         if video_path is not None:
-            logger.info("Passing video to Qwen with requested sample fps=%.3f", video_fps)
-            content.append({"type": "video", "video": str(video_path), "fps": video_fps})
+            logger.info(
+                "Passing video to Qwen: fps=%.3f max_frames=%d", video_fps, video_max_frames
+            )
+            content.append({
+                "type": "video",
+                "video": str(video_path),
+                "fps": video_fps,
+                "max_frames": video_max_frames,
+                "min_pixels": 4 * 28 * 28,
+                "max_pixels": _IMAGE_MAX_PIXELS,
+            })
 
         _append_auxiliary_frame_content(content, auxiliary_frames)
 

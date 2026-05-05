@@ -88,6 +88,7 @@ class SharpnessStabilityTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         if not candidate_frames:
             return []

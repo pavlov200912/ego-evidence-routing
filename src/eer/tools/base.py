@@ -26,6 +26,9 @@ class EvidenceTool(ABC):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        *,
+        choices: list[str] | None = None,
+        video_path: str | None = None,
     ) -> list[Frame]:
         """Select *budget* frames from *candidate_frames*.
 
@@ -35,6 +38,9 @@ class EvidenceTool(ABC):
             candidate_frames: All frames available for this clip.
             question: The VQA question text (may be used for text-guided tools).
             budget: Number of frames to return.
+            choices: Answer choices (optional, used by answer-guided tools).
+            video_path: Path to the source video (optional, used by tools that
+                need to extract frames beyond the candidate pool).
 
         Returns:
             A list of at most *budget* Frame objects.

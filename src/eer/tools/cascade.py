@@ -39,14 +39,15 @@ class CascadeTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **kwargs,
     ) -> list[Frame]:
         if not candidate_frames:
             return []
 
         pool_size = min(budget * self._overselect_factor, len(candidate_frames))
-        pool = self._stage1.select(candidate_frames, question, budget=pool_size)
+        pool = self._stage1.select(candidate_frames, question, budget=pool_size, **kwargs)
 
-        selected = self._stage2.select(pool, question, budget=budget)
+        selected = self._stage2.select(pool, question, budget=budget, **kwargs)
         logger.debug(
             "CascadeTool(%s): %d → %d → %d frames",
             self.name,

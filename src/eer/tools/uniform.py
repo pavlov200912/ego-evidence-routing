@@ -25,6 +25,7 @@ class UniformTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Return *budget* evenly-spaced frames from *candidate_frames*.
 

@@ -25,9 +25,11 @@ class Frame:
     image: Image.Image
 
 
-def _cache_dir(video_path: Path, fps: float) -> Path:
-    """Deterministic cache directory based on video path and fps."""
-    key = hashlib.md5(f"{video_path.resolve()}@{fps}".encode()).hexdigest()[:12]
+def _cache_dir(video_path: Path, fps: float, start_s: float | None, end_s: float | None) -> Path:
+    """Deterministic cache directory based on video path, fps, and time window."""
+    key = hashlib.md5(
+        f"{video_path.resolve()}@{fps}@{start_s}-{end_s}".encode()
+    ).hexdigest()[:12]
     return _CACHE_ROOT / key
 
 
@@ -76,6 +78,8 @@ def _save_to_cache(cache: Path, frames: list[Frame]) -> None:
 def extract_candidate_frames(
     video_path: str | Path,
     fps: float = 1.0,
+    start_s: float | None = None,
+    end_s: float | None = None,
     cache_dir: Path | None = None,
 ) -> list[Frame]:
     """Extract frames at *fps* from *video_path* using decord.
@@ -86,6 +90,8 @@ def extract_candidate_frames(
     Args:
         video_path: Path to the video file.
         fps: Sampling rate in frames per second.
+        start_s: Start of the clip window in seconds (None = beginning of video).
+        end_s: End of the clip window in seconds (None = end of video).
         cache_dir: Override default cache root (useful in tests).
 
     Returns:
@@ -97,7 +103,7 @@ def extract_candidate_frames(
         logger.warning("Video file not found: %s — returning empty frame list", video_path)
         return []
 
-    cache = (cache_dir or _CACHE_ROOT) / _cache_dir(video_path, fps).name
+    cache = (cache_dir or _CACHE_ROOT) / _cache_dir(video_path, fps, start_s, end_s).name
     cached = _load_from_cache(cache)
     if cached is not None:
         return cached
@@ -111,7 +117,11 @@ def extract_candidate_frames(
         total_frames = len(vr)
         step = max(1, int(round(native_fps / fps)))
 
-        frame_indices = list(range(0, total_frames, step))
+        first_frame = int(start_s * native_fps) if start_s is not None else 0
+        last_frame = int(end_s * native_fps) if end_s is not None else total_frames
+        last_frame = min(last_frame, total_frames)
+
+        frame_indices = list(range(first_frame, last_frame, step))
         if not frame_indices:
             return []
 
@@ -124,7 +134,11 @@ def extract_candidate_frames(
             frames.append(Frame(index=i, timestamp_s=timestamp, image=img))
 
         _save_to_cache(cache, frames)
-        logger.info("Extracted %d frames from %s at %.1f fps", len(frames), video_path, fps)
+        logger.info(
+            "Extracted %d frames from %s at %.1f fps (%.1fs – %.1fs)",
+            len(frames), video_path, fps,
+            start_s or 0.0, end_s or (total_frames / native_fps),
+        )
         return frames
 
     except Exception:

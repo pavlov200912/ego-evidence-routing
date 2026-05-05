@@ -86,6 +86,7 @@ class OCRTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Rank frames based on the amount/confidence of text detected in them.
         

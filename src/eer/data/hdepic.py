@@ -1,79 +1,100 @@
 """HD-EPIC VQA dataset loader.
 
-Placeholder structure — adapt once Eren provides the real data format.
+Loads questions from the vqa-benchmark/ directory of hd-epic-annotations.
+Each JSON file in that directory corresponds to one task/category.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 logger = logging.getLogger(__name__)
 
-VALID_CATEGORIES = frozenset(
-    [
-        "action_recognition",
-        "object_state",
-        "spatial_relation",
-        "temporal_order",
-        "counting",
-        "causal",
-        "social_interaction",
-    ]
-)
+_TIME_TOKEN_RE = re.compile(r"<TIME\s+(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+video\s+1>")
 
-VALID_ANSWER_LETTERS = frozenset("ABCDE")
+
+def _hhmmss_to_seconds(t: str) -> float:
+    """Convert 'HH:MM:SS.mmm' to total seconds."""
+    h, m, s = t.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def _extract_question_time_window(question: str) -> tuple[float, float] | None:
+    """Extract (start_s, end_s) from a question containing two <TIME> tokens.
+
+    Returns None if the question contains anything other than exactly two TIME
+    tokens referencing video 1 (e.g. localization questions where times are in
+    the answer choices, not the question body).
+    """
+    matches = _TIME_TOKEN_RE.findall(question)
+    if len(matches) == 2:
+        t0, t1 = _hhmmss_to_seconds(matches[0]), _hhmmss_to_seconds(matches[1])
+        return (min(t0, t1), max(t0, t1))
+    return None
 
 
 @dataclass
 class VQAQuestion:
-    """A single VQA item from HD-EPIC."""
+    """A single VQA item from the HD-EPIC benchmark."""
 
-    question_id: str
-    video_id: str
-    start_time: float  # seconds
-    end_time: float  # seconds
+    question_id: str       # e.g. "fine_grained_action_localization_0"
+    video_id: str          # e.g. "P01-20240204-121042"
+    start_time: float | None  # clip window start in seconds (None = whole video)
+    end_time: float | None    # clip window end in seconds (None = whole video)
     question: str
-    choices: list[str]  # exactly 5 strings, indexed 0-4 (A-E)
-    correct_answer: str  # letter A–E
-    category: str  # one of VALID_CATEGORIES
-    prototype: str  # one of ~30 prototype strings
+    choices: list[str]     # always 5 strings
+    correct_idx: int       # 0-indexed (0–4)
+    category: str          # filename stem, e.g. "fine_grained_action_localization"
 
     @property
-    def duration_s(self) -> float:
-        return self.end_time - self.start_time
+    def correct_answer(self) -> str:
+        """Correct choice as a letter A–E."""
+        return "ABCDE"[self.correct_idx]
+
+    @property
+    def duration_s(self) -> float | None:
+        """Clip window length in seconds, or None when the full video is used."""
+        if self.start_time is not None and self.end_time is not None:
+            return self.end_time - self.start_time
+        return None
 
     def choice_dict(self) -> dict[str, str]:
-        """Map answer letter → choice text."""
         return {letter: text for letter, text in zip("ABCDE", self.choices)}
 
 
-def _parse_question(raw: dict[str, Any]) -> VQAQuestion:
-    """Parse a raw dict (from JSON/CSV) into a VQAQuestion.
+def _parse_entry(question_id: str, raw: dict[str, Any], category: str) -> VQAQuestion:
+    vid = raw["inputs"]["video 1"]
+    start = _hhmmss_to_seconds(vid["start_time"]) if "start_time" in vid else None
+    end = _hhmmss_to_seconds(vid["end_time"]) if "end_time" in vid else None
 
-    Adjust field names here when the real HD-EPIC format is known.
-    """
+    # Fall back to parsing the question text when the JSON has no clip window.
+    # This covers retrieval-style questions where the temporal context is
+    # expressed as "<TIME HH:MM:SS video 1>" tokens inside the question.
+    if start is None and end is None:
+        parsed = _extract_question_time_window(raw["question"])
+        if parsed is not None:
+            start, end = parsed
+
     return VQAQuestion(
-        question_id=str(raw["question_id"]),
-        video_id=str(raw["video_id"]),
-        start_time=float(raw["start_time"]),
-        end_time=float(raw["end_time"]),
-        question=str(raw["question"]),
-        choices=[str(raw[f"choice_{l}"]) for l in "ABCDE"],
-        correct_answer=str(raw["correct_answer"]).upper(),
-        category=str(raw["category"]),
-        prototype=str(raw["prototype"]),
+        question_id=question_id,
+        video_id=vid["id"],
+        start_time=start,
+        end_time=end,
+        question=raw["question"],
+        choices=list(raw["choices"]),
+        correct_idx=int(raw["correct_idx"]),
+        category=category,
     )
 
 
 @dataclass
 class HDEPICDataset:
-    """Collection of HD-EPIC VQA questions with filtering and splitting helpers."""
+    """Collection of HD-EPIC VQA questions with filtering helpers."""
 
     questions: list[VQAQuestion] = field(default_factory=list)
 
@@ -83,74 +104,83 @@ class HDEPICDataset:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "HDEPICDataset":
-        """Load from a JSON file.
+        """Load one category JSON file from vqa-benchmark/.
 
-        Expected format: a list of question objects, or a dict with a
-        ``"questions"`` key containing the list.
-
-        Args:
-            path: Path to the JSON file.
+        The category name is taken from the filename stem
+        (e.g. fine_grained_action_localization.json → 'fine_grained_action_localization').
         """
         path = Path(path)
-        logger.info("Loading HD-EPIC VQA questions from %s", path)
-        with path.open() as f:
-            raw = json.load(f)
-
-        items = raw if isinstance(raw, list) else raw["questions"]
-        questions = [_parse_question(item) for item in items]
-        logger.info("Loaded %d questions", len(questions))
+        category = path.stem
+        logger.info("Loading %s", path)
+        raw: dict[str, Any] = json.loads(path.read_text())
+        questions = [_parse_entry(qid, entry, category) for qid, entry in raw.items()]
+        logger.info("Loaded %d questions (category=%s)", len(questions), category)
         return cls(questions=questions)
 
     @classmethod
-    def from_csv(cls, path: str | Path) -> "HDEPICDataset":
-        """Load from a CSV file.
-
-        Expected columns: question_id, video_id, start_time, end_time,
-        question, choice_A, choice_B, choice_C, choice_D, choice_E,
-        correct_answer, category, prototype.
+    def from_dir(
+        cls,
+        vqa_dir: str | Path,
+        categories: list[str] | None = None,
+    ) -> "HDEPICDataset":
+        """Load all (or selected) JSON files from a vqa-benchmark/ directory.
 
         Args:
-            path: Path to the CSV file.
+            vqa_dir: Path to the vqa-benchmark/ directory.
+            categories: If given, only load files whose stem is in this list.
+                        E.g. ['fine_grained_action_localization', 'recipe_step_localization']
         """
-        path = Path(path)
-        logger.info("Loading HD-EPIC VQA questions from %s", path)
-        df = pd.read_csv(path)
-        questions = [_parse_question(row) for row in df.to_dict(orient="records")]
-        logger.info("Loaded %d questions", len(questions))
-        return cls(questions=questions)
+        vqa_dir = Path(vqa_dir)
+        all_questions: list[VQAQuestion] = []
+        for json_file in sorted(vqa_dir.glob("*.json")):
+            if categories is not None and json_file.stem not in categories:
+                continue
+            sub = cls.from_json(json_file)
+            all_questions.extend(sub.questions)
+        logger.info("Loaded %d questions total from %s", len(all_questions), vqa_dir)
+        return cls(questions=all_questions)
 
     # ------------------------------------------------------------------
     # Filtering
     # ------------------------------------------------------------------
 
     def filter_by_duration(self, max_seconds: float) -> "HDEPICDataset":
-        """Return a new dataset with clips no longer than *max_seconds*.
+        """Keep questions whose clip window is at most max_seconds.
 
-        Args:
-            max_seconds: Maximum clip duration in seconds.
+        Questions with no clip window (whole video) are always kept.
         """
-        kept = [q for q in self.questions if q.duration_s <= max_seconds]
+        kept = [
+            q for q in self.questions
+            if q.duration_s is None or q.duration_s <= max_seconds
+        ]
         logger.info(
             "filter_by_duration(%.0fs): %d → %d questions",
-            max_seconds,
-            len(self.questions),
-            len(kept),
+            max_seconds, len(self.questions), len(kept),
+        )
+        return HDEPICDataset(questions=kept)
+
+    def filter_by_min_duration(self, min_seconds: float) -> "HDEPICDataset":
+        """Keep questions whose clip window is at least min_seconds.
+
+        Questions with no clip window (whole video) are always kept.
+        """
+        kept = [
+            q for q in self.questions
+            if q.duration_s is None or q.duration_s >= min_seconds
+        ]
+        logger.info(
+            "filter_by_min_duration(%.0fs): %d → %d questions",
+            min_seconds, len(self.questions), len(kept),
         )
         return HDEPICDataset(questions=kept)
 
     def filter_by_categories(self, categories: list[str]) -> "HDEPICDataset":
-        """Return a new dataset containing only the specified categories.
-
-        Args:
-            categories: List of category strings (e.g. ["action_recognition"]).
-        """
+        """Keep only questions whose category is in *categories*."""
         cat_set = set(categories)
         kept = [q for q in self.questions if q.category in cat_set]
         logger.info(
             "filter_by_categories(%s): %d → %d questions",
-            categories,
-            len(self.questions),
-            len(kept),
+            categories, len(self.questions), len(kept),
         )
         return HDEPICDataset(questions=kept)
 
@@ -159,19 +189,12 @@ class HDEPICDataset:
     # ------------------------------------------------------------------
 
     def split(self, val_ratio: float = 0.3) -> tuple["HDEPICDataset", "HDEPICDataset"]:
-        """Deterministic train/val split (no shuffle, keeps ordering stable).
-
-        Args:
-            val_ratio: Fraction of questions to put in val set.
-
-        Returns:
-            (train_dataset, val_dataset) tuple.
-        """
+        """Deterministic train/val split (first val_ratio fraction = val)."""
         n_val = max(1, int(len(self.questions) * val_ratio))
-        train_qs = self.questions[n_val:]
-        val_qs = self.questions[:n_val]
-        logger.info("Split: %d train / %d val", len(train_qs), len(val_qs))
-        return HDEPICDataset(questions=train_qs), HDEPICDataset(questions=val_qs)
+        return (
+            HDEPICDataset(questions=self.questions[n_val:]),
+            HDEPICDataset(questions=self.questions[:n_val]),
+        )
 
     # ------------------------------------------------------------------
     # Dunder helpers

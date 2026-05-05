@@ -1,8 +1,10 @@
 """Evaluation metrics for the EER ablation study.
 
 Expected DataFrame columns:
-    question_id, category, prototype, tool,
-    predicted, correct, log_prob, is_correct
+    question_id, category, mode, tool, predicted, correct, is_correct
+
+`mode` is either "replace" (auxiliary frames only) or "augment" (native video
++ auxiliary frames).
 """
 
 from __future__ import annotations
@@ -10,107 +12,83 @@ from __future__ import annotations
 import pandas as pd
 
 
-def compute_accuracy(results: pd.DataFrame) -> dict[str, float]:
-    """Overall accuracy per tool.
-
-    Args:
-        results: Results DataFrame (see module docstring for columns).
+def compute_accuracy(results: pd.DataFrame) -> pd.DataFrame:
+    """Overall accuracy per (tool, mode).
 
     Returns:
-        Dict mapping tool name → accuracy in [0, 1].
+        DataFrame with columns [tool, mode, accuracy, n_questions].
     """
     return (
-        results.groupby("tool")["is_correct"]
-        .mean()
-        .to_dict()
+        results.groupby(["tool", "mode"])["is_correct"]
+        .agg(accuracy="mean", n_questions="count")
+        .reset_index()
     )
 
 
 def compute_per_category_accuracy(results: pd.DataFrame) -> pd.DataFrame:
-    """Accuracy grouped by (tool, category).
-
-    Args:
-        results: Results DataFrame.
+    """Accuracy grouped by (tool, mode, category).
 
     Returns:
-        DataFrame with columns [tool, category, accuracy, n_questions].
+        DataFrame with columns [tool, mode, category, accuracy, n_questions].
     """
-    grouped = (
-        results.groupby(["tool", "category"])["is_correct"]
+    return (
+        results.groupby(["tool", "mode", "category"])["is_correct"]
         .agg(accuracy="mean", n_questions="count")
         .reset_index()
     )
-    return grouped
 
 
-def compute_per_prototype_accuracy(results: pd.DataFrame) -> pd.DataFrame:
-    """Accuracy grouped by (tool, prototype).
-
-    Args:
-        results: Results DataFrame.
-
-    Returns:
-        DataFrame with columns [tool, prototype, accuracy, n_questions].
-    """
-    grouped = (
-        results.groupby(["tool", "prototype"])["is_correct"]
-        .agg(accuracy="mean", n_questions="count")
-        .reset_index()
-    )
-    return grouped
-
-
-def compute_oracle_routing(results: pd.DataFrame) -> dict[str, float]:
+def compute_oracle_routing(results: pd.DataFrame) -> pd.DataFrame:
     """Upper-bound accuracy when we always pick the best tool per question.
 
-    For each question, oracle is correct if *any* tool answered correctly.
-
-    Args:
-        results: Results DataFrame.
+    Computed separately per mode. For each (mode, question_id), oracle is
+    correct if any tool answered correctly.
 
     Returns:
-        Dict with key ``"oracle"`` → accuracy float, plus
-        ``"baseline"`` → accuracy of the worst single tool.
+        DataFrame with columns [mode, oracle, best_single_tool, best_single_accuracy].
     """
-    per_question = results.groupby("question_id")["is_correct"].max()
-    oracle_acc = float(per_question.mean())
+    rows = []
+    for mode, grp in results.groupby("mode"):
+        per_question = grp.groupby("question_id")["is_correct"].max()
+        oracle_acc = float(per_question.mean())
 
-    tool_accs = compute_accuracy(results)
-    baseline_acc = min(tool_accs.values()) if tool_accs else float("nan")
+        tool_accs = grp.groupby("tool")["is_correct"].mean()
+        best_tool = str(tool_accs.idxmax())
+        best_acc = float(tool_accs.max())
 
-    return {"oracle": oracle_acc, "baseline": baseline_acc}
+        rows.append({
+            "mode": mode,
+            "oracle": oracle_acc,
+            "best_single_tool": best_tool,
+            "best_single_accuracy": best_acc,
+        })
+    return pd.DataFrame(rows)
 
 
 def compute_agreement(results: pd.DataFrame) -> pd.DataFrame:
     """Accuracy stratified by how many tools agree on the predicted answer.
 
-    For each question, count the number of tools predicting the same
-    letter as the plurality answer.  Compute accuracy per agreement level.
-
-    Args:
-        results: Results DataFrame.
+    Computed per mode.
 
     Returns:
-        DataFrame with columns [n_tools_agree, accuracy, n_questions].
+        DataFrame with columns [mode, n_tools_agree, accuracy, n_questions].
     """
-    # Majority vote per question
     plurality = (
-        results.groupby(["question_id", "predicted"])
+        results.groupby(["mode", "question_id", "predicted"])
         .size()
         .reset_index(name="count")
     )
     majority = (
         plurality.sort_values("count", ascending=False)
-        .drop_duplicates("question_id")
+        .drop_duplicates(["mode", "question_id"])
         .rename(columns={"predicted": "plurality_answer", "count": "n_agree"})
     )
 
-    merged = results.merge(majority[["question_id", "n_agree"]], on="question_id")
+    merged = results.merge(majority[["mode", "question_id", "n_agree"]], on=["mode", "question_id"])
 
-    agg = (
-        merged.groupby("n_agree")["is_correct"]
+    return (
+        merged.groupby(["mode", "n_agree"])["is_correct"]
         .agg(accuracy="mean", n_questions="count")
         .reset_index()
         .rename(columns={"n_agree": "n_tools_agree"})
     )
-    return agg

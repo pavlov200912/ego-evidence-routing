@@ -50,15 +50,21 @@ class CLIPRetrievalTool(EvidenceTool):
     def name(self) -> str:
         return "clip"
 
+    _EMBED_BATCH_SIZE = 64
+
     def _embed_images(self, frames: list[Frame]) -> np.ndarray:
         """Return L2-normalized image embeddings, shape (N, D)."""
-        images = torch.stack(
-            [self._preprocess(f.image) for f in frames]  # type: ignore[arg-type]
-        ).to(self._device)
-        with torch.inference_mode():
-            feats = self._model.encode_image(images)
-            feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats.cpu().float().numpy()
+        all_feats: list[np.ndarray] = []
+        for i in range(0, len(frames), self._EMBED_BATCH_SIZE):
+            batch = frames[i : i + self._EMBED_BATCH_SIZE]
+            images = torch.stack(
+                [self._preprocess(f.image) for f in batch]  # type: ignore[arg-type]
+            ).to(self._device)
+            with torch.inference_mode():
+                feats = self._model.encode_image(images)
+                feats = feats / feats.norm(dim=-1, keepdim=True)
+            all_feats.append(feats.cpu().float().numpy())
+        return np.concatenate(all_feats, axis=0)
 
     def _embed_text(self, text: str) -> np.ndarray:
         """Return L2-normalized text embedding, shape (1, D)."""
@@ -73,6 +79,7 @@ class CLIPRetrievalTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Return top-*budget* frames by cosine similarity to *question*.
 
