@@ -48,6 +48,7 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+notebooks/
 
 # Project-specific
 data/
