@@ -25,6 +25,7 @@ wheels/
 venv/
 ENV/
 env/
+proj_env/
 
 # IDE
 .idea/
@@ -57,6 +58,9 @@ logs/
 *.json
 !configs/*.yaml
 !pyproject.toml
+
+#results
+results/
 
 # OS
 .DS_Store
