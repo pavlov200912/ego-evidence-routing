@@ -27,8 +27,8 @@ import argparse
 import csv
 import logging
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -49,25 +49,81 @@ from eer.vlm.qwen import QwenVLM
 logger = logging.getLogger(__name__)
 
 _QWEN_NATIVE = object()  # sentinel: pass raw video, no auxiliary frames
+_TOOL_NAMES = [
+    "qwen_native",
+    "uniform",
+    "clip",
+    "motion_then_clip",
+    "ocr_crop",
+    "hand",
+    "object_tracking",
+    "uniform+clip",
+    "answer_guided_oracle",
+]
+_DEFAULT_TOOL_NAMES = [
+    "qwen_native",
+    "uniform",
+    "clip",
+    "motion_then_clip",
+    "ocr_crop",
+    "hand",
+    "object_tracking",
+    "uniform+clip",
+    "answer_guided_oracle",
+]
+_TOOL_ALIASES = {}
+
+
+def _cap_evidence(frames: list, budget: int) -> list:
+    """Deduplicate and cap selected evidence to the shared visual budget."""
+    if budget <= 0:
+        return []
+
+    seen: set[tuple[int, float]] = set()
+    selected = []
+    for frame in sorted(frames, key=lambda f: (f.timestamp_s, f.index)):
+        key = (frame.index, frame.timestamp_s)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(frame)
+        if len(selected) >= budget:
+            break
+    return selected
 
 # Each entry is either:
-#   tool_instance          → run with the default budget
-#   (tool_instance, int)   → run with the given budget override (e.g. uniform-16)
+#   tool_instance          → run with the shared --budget
 #   _QWEN_NATIVE           → pass raw video only (C0)
-def _make_tools() -> dict[str, object]:
-    clip = CLIPRetrievalTool()
-    return {
-        "qwen_native":     _QWEN_NATIVE,                                          # C0
-        "uniform_8":       UniformTool(),                                          # C1
-        "uniform_16":      (UniformTool(), 16),                                    # C2
-        "clip":            clip,                                                   # C3
-        "motion":          CascadeTool(MotionTool(), clip, overselect_factor=4),   # C4
-        "ocr_crop":        OCRCropTool(),                                          # C5
-        "hand":            HandTool(),                                             # C6
-        "object_tracking": ObjectTrackingTool(),                                   # C7
-        "uniform+clip":    UnionTool(UniformTool(), clip),                         # C8
-        "answer_guided":   AnswerGuidedTool(),
+def _build_tools(tool_names: list[str], cfg: dict) -> dict[str, object]:
+    """Instantiate only the requested tools.
+
+    Several tools load large models at construction time. Keeping this lazy
+    makes small sanity runs cheap, e.g. ``--tools qwen_native,uniform_8`` will
+    not load CLIP, EasyOCR, hands23, or GroundingDINO.
+    """
+    cache: dict[str, object] = {}
+
+    def clip() -> CLIPRetrievalTool:
+        if "clip" not in cache:
+            cache["clip"] = CLIPRetrievalTool(
+                model_name=cfg["tools"]["clip_model"],
+                pretrained=cfg["tools"]["clip_pretrained"],
+            )
+        return cache["clip"]  # type: ignore[return-value]
+
+    builders: dict[str, Callable[[], object]] = {
+        "qwen_native": lambda: _QWEN_NATIVE,                                         # C0
+        "uniform": lambda: UniformTool(),                                            # C1
+        "clip": clip,                                                               # C3
+        "motion_then_clip": lambda: CascadeTool(MotionTool(), clip(), overselect_factor=4),  # C4
+        "ocr_crop": lambda: OCRCropTool(),                                           # C5
+        "hand": lambda: HandTool(),                                                  # C6
+        "object_tracking": lambda: ObjectTrackingTool(),                             # C7
+        "uniform+clip": lambda: UnionTool(UniformTool(), clip()),                    # C8
+        "answer_guided_oracle": lambda: AnswerGuidedTool(),
     }
+
+    return {name: builders[name]() for name in tool_names}
 
 
 def _build_video_index(root_dir: Path) -> dict[str, Path]:
@@ -114,7 +170,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tools", type=str, default=None,
         help="Comma-separated list of tools to run (e.g. 'qwen_native,object_tracking'). "
-             "Defaults to all tools.",
+             "Defaults to the main non-oracle tools. Use answer_guided_oracle explicitly "
+             "for the answer-choice time-window oracle.",
     )
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     p.add_argument("--log-file", type=Path, default=None, help="Write logs to this file in addition to stderr.")
@@ -156,23 +213,45 @@ def main() -> None:
 
     video_index = _build_video_index(video_clips_dir)
 
-    results_dir = Path(cfg["eval"]["results_dir"])
-    results_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     cat_tag = (args.category or "all").replace("/", "_")
-    output_path = results_dir / f"ablation_{mode}_{cat_tag}_{timestamp}.csv"
+    results_dir = Path(cfg["eval"]["results_dir"]) / cat_tag
+    results_dir.mkdir(parents=True, exist_ok=True)
+    output_path = results_dir / f"{mode}_k{args.budget}.csv"
 
-    fieldnames = ["question_id", "category", "mode", "tool", "predicted", "correct", "is_correct"]
+    fieldnames = [
+        "question_id",
+        "category",
+        "mode",
+        "tool",
+        "requested_budget",
+        "n_selected_raw",
+        "n_selected_final",
+        "predicted",
+        "correct",
+        "is_correct",
+    ]
 
-    # Instantiate tools once — CLIP and GroundingDINO load large models
-    tool_instances: dict[str, object] = _make_tools()
     if args.tools is not None:
-        requested = [t.strip() for t in args.tools.split(",")]
-        unknown = [t for t in requested if t not in tool_instances]
+        requested = [_TOOL_ALIASES.get(t.strip(), t.strip()) for t in args.tools.split(",")]
+        unknown = [t for t in requested if t not in _TOOL_NAMES]
         if unknown:
-            logger.error("Unknown tool(s): %s. Available: %s", unknown, list(tool_instances))
+            logger.error(
+                "Unknown tool(s): %s. Available: %s. Aliases: %s",
+                unknown,
+                _TOOL_NAMES,
+                _TOOL_ALIASES,
+            )
             return
-        tool_instances = {k: v for k, v in tool_instances.items() if k in requested}
+    else:
+        requested = list(_DEFAULT_TOOL_NAMES)
+
+    if mode == "replace" and "qwen_native" in requested:
+        requested = [name for name in requested if name != "qwen_native"]
+        logger.info("Skipping qwen_native in replacement mode; it is identical to augmentation.")
+
+    # Instantiate tools once, after filtering. CLIP is cached/shared across
+    # conditions that need it.
+    tool_instances = _build_tools(requested, cfg)
 
     correct_counts: dict[str, int] = defaultdict(int)
     total_counts: dict[str, int] = defaultdict(int)
@@ -200,11 +279,10 @@ def main() -> None:
                 logger.info("Subsampled candidate frames to %d", len(candidate_frames))
 
             for tool_name, tool_entry in tool_instances.items():
-                # Unpack optional budget override
-                if isinstance(tool_entry, tuple):
-                    tool, tool_budget = tool_entry
-                else:
-                    tool, tool_budget = tool_entry, args.budget
+                tool = tool_entry
+                tool_budget = args.budget
+                n_selected_raw = 0
+                n_selected_final = 0
 
                 if tool is _QWEN_NATIVE:
                     auxiliary_frames = None
@@ -220,8 +298,18 @@ def main() -> None:
                                 choices=q.choices,
                                 video_path=str(video_path),
                             )
+                            n_selected_raw = len(selected)
+                            selected = _cap_evidence(selected, tool_budget)
+                            n_selected_final = len(selected)
                             if selected:
                                 auxiliary_frames = selected
+                            if n_selected_raw > n_selected_final:
+                                logger.info(
+                                    "Capped %s evidence from %d to %d items",
+                                    tool_name,
+                                    n_selected_raw,
+                                    n_selected_final,
+                                )
                         except Exception as e:
                             logger.error(
                                 "Frame selection error Q %s tool %s: %s",
@@ -256,13 +344,21 @@ def main() -> None:
                     "category": q.category,
                     "mode": mode,
                     "tool": tool_name,
+                    "requested_budget": tool_budget if tool is not _QWEN_NATIVE else 0,
+                    "n_selected_raw": n_selected_raw,
+                    "n_selected_final": n_selected_final,
                     "predicted": predicted,
                     "correct": q.correct_answer,
                     "is_correct": int(is_correct),
                 })
                 logger.info(
-                    "  [%-22s] → %s  (correct=%s) %s",
-                    tool_name, predicted, q.correct_answer,
+                    "  [%-22s] budget=%d aux=%d/%d → %s  (correct=%s) %s",
+                    tool_name,
+                    tool_budget if tool is not _QWEN_NATIVE else 0,
+                    n_selected_final,
+                    n_selected_raw,
+                    predicted,
+                    q.correct_answer,
                     "✓" if is_correct else "✗",
                 )
 
