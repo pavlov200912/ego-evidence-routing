@@ -111,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         help="Augmentation mode: pass native video + auxiliary frames to Qwen. "
              "Default (no flag) is replacement mode: auxiliary frames only.",
     )
+    p.add_argument(
+        "--tools", type=str, default=None,
+        help="Comma-separated list of tools to run (e.g. 'qwen_native,object_tracking'). "
+             "Defaults to all tools.",
+    )
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     p.add_argument("--log-file", type=Path, default=None, help="Write logs to this file in addition to stderr.")
     return p.parse_args()
@@ -161,6 +166,13 @@ def main() -> None:
 
     # Instantiate tools once — CLIP and GroundingDINO load large models
     tool_instances: dict[str, object] = _make_tools()
+    if args.tools is not None:
+        requested = [t.strip() for t in args.tools.split(",")]
+        unknown = [t for t in requested if t not in tool_instances]
+        if unknown:
+            logger.error("Unknown tool(s): %s. Available: %s", unknown, list(tool_instances))
+            return
+        tool_instances = {k: v for k, v in tool_instances.items() if k in requested}
 
     correct_counts: dict[str, int] = defaultdict(int)
     total_counts: dict[str, int] = defaultdict(int)
