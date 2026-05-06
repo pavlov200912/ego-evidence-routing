@@ -267,6 +267,7 @@ class HandTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Select frames with strongest hand-object interactions.
 

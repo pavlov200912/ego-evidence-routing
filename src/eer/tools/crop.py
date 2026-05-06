@@ -303,6 +303,7 @@ class CropTool(EvidenceTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Return up to *budget* cropped Frame objects in temporal order."""
         if not candidate_frames or budget <= 0:
@@ -384,6 +385,7 @@ class OCRCropTool(CropTool):
         candidate_frames: list[Frame],
         question: str,
         budget: int = 8,
+        **_kwargs,
     ) -> list[Frame]:
         """Return OCR-guided crops, using saliency crops to fill the budget."""
         if not candidate_frames or budget <= 0:
