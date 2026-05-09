@@ -55,7 +55,7 @@ _TOOL_NAMES = [
     "clip",
     "motion_then_clip",
     "ocr_crop",
-    "hand",
+    # "hand",
     "object_tracking",
     "uniform+clip",
     "answer_guided_oracle",
@@ -66,7 +66,7 @@ _DEFAULT_TOOL_NAMES = [
     "clip",
     "motion_then_clip",
     "ocr_crop",
-    "hand",
+    # "hand",
     "object_tracking",
     "uniform+clip",
     "answer_guided_oracle",
@@ -259,6 +259,7 @@ def main() -> None:
     with output_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+        f.flush()
 
         for q in questions:
             logger.info("--- Q %s [%s] ---", q.question_id, q.category)
@@ -351,6 +352,7 @@ def main() -> None:
                     "correct": q.correct_answer,
                     "is_correct": int(is_correct),
                 })
+                f.flush()
                 logger.info(
                     "  [%-22s] budget=%d aux=%d/%d → %s  (correct=%s) %s",
                     tool_name,
